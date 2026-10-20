@@ -1,0 +1,12 @@
+[Unit]
+Description=HTTP websocket proxy in front of sshd
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+ExecStart=/opt/ssh_httpserver --listen /tmp/ssh_http_proxy_sock
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

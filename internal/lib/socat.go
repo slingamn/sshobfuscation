@@ -1,13 +1,10 @@
 // Copyright (c) 2021 Shivaram Lingamneni
-// released under the MIT license
+// released under the 0BSD license
 
-package main
+package lib
 
 import (
-	"crypto/tls"
 	"io"
-	"log"
-	"os"
 	"sync"
 	"time"
 )
@@ -75,45 +72,4 @@ func (s *Socat) realClose() (err error) {
 		return e1
 	}
 	return e2
-}
-
-// StdioRWC wraps os.Stdin and os.Stdout to expose an io.ReadWriteCloser.
-type StdioRWC struct{}
-
-func (s StdioRWC) Read(buf []byte) (n int, err error) {
-	return os.Stdin.Read(buf)
-}
-
-func (s StdioRWC) Write(buf []byte) (n int, err error) {
-	return os.Stdout.Write(buf)
-}
-
-func (s StdioRWC) Close() (err error) {
-	return nil
-}
-
-func main_(args []string) (code int) {
-	if len(args) < 1 {
-		log.Printf("insufficient arguments\n")
-		return 1
-	}
-	addr := args[0]
-	var conf *tls.Config
-	if len(args) > 1 && args[1] == "insecure" {
-		conf = &tls.Config{
-			InsecureSkipVerify: true,
-		}
-	}
-	conn, err := tls.Dial("tcp", addr, conf)
-	if err != nil {
-		log.Printf("error dialing remote server %s: %v\n", addr, err)
-		return 1
-	}
-	socat := NewSocat(conn, StdioRWC{}, 0)
-	socat.Wait()
-	return 0
-}
-
-func main() {
-	os.Exit(main_(os.Args[1:]))
 }

@@ -1,0 +1,15 @@
+[Unit]
+Description=tls proxy in front of sshd
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+ExecStart=/opt/ssh_tlsserver
+Restart=on-failure
+# deny filesystem access since we don't need it
+TemporaryFileSystem=/
+BindReadOnlyPaths=/opt
+
+[Install]
+WantedBy=multi-user.target

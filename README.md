@@ -1,43 +1,112 @@
-This are config files for using stunnel to tunnel ssh connections
-inside TLS on port 443, for defeating application-level firewalls
-that detect the ssh protocol. The implementation is simple:
-on the client side, `ProxyCommand` (see ssh_config(5) for details)
-is used to wrap the ssh connection in TLS, and on the server side,
-stunnel(1) is used to terminate TLS and forward the resulting connection
-to the local sshd.
+SSH obfuscation tools
+=====================
 
-Server-side configuration:
+These are tools in memory-safe Go for obfuscating ssh traffic inside
+TLS on port 443, in order to defeat application-level firewalls that
+detect the ssh protocol (found in some public WiFi systems, airplanes
+and the like). To such firewalls (as long as they do not attempt
+active TLS inspection via MITM attacks, which is not common practice), the
+traffic should appear indistinguishable from a long-running WebSocket
+connection over TLS.
 
-1. You need a stunnel instance that listens on port 443, then terminates TLS
-and forwards the connection to your sshd (typically on port 22).
-`sshd443_server.conf` is a stunnel config file that handles this.
-2. Listening on port 443 requires privileges. On a systemd system, you can
-install `sshd443.service` and `sshd443.socket` in `/etc/systemd/system` and
-enable them with `systemctl enable`; this will allow systemd to listen on 443
-and then pass the listen socket to an unprivileged stunnel process. With this
-setup, you may need to disable stunnel's own systemd unit, e.g.
-`systemctl disable stunnel4`.
-3. For a simpler configuration, you can modify `sshd443_server.conf` to listen
-on 443 directly, then run it as root.
+There are two implementations:
 
-Client-side configuration:
+* `ssh_tlsserver` wraps the SSH protocol in an outer layer of TLS. This is
+  the simplest solution if you're not already running an httpd on port
+  443, since it can listen directly on 443, terminate TLS, and forward to
+  the sshd.
+* `ssh_httpserver` performs a WebSocket handshake, i.e. it consumes a
+  `HTTP/1.1 GET` request and associated headers from the client,
+  returns a `HTTP/1.1 101 Switching Protocols` response with appropriate
+  headers, then forwards the connection to the sshd. This can be used with an
+  existing reverse proxy (such as nginx or Caddy) that listens on port 443
+  and terminates TLS. As long as a correct WebSocket handshake was exchanged
+  (and periodic layer 7 keepalives are sent during the lifetime of the
+  persistent connection), the reverse proxy does not care whether the data
+  sent over the connection is WebSocket frames or some other protocol
+  (in our case, SSH).
 
-1. If necessary, install the [Go programming language](https://golang.org/dl/)
-2. Compile the proxy command with `go build proxycommand.go`
-3. Install it in your home directory on the client machine,
-e.g., `mv proxycommand ~/bin/proxycommand_ssh_in_tls`
-4. Add the following block to ~/.ssh/config:
+Both implementations have only one layer of tunnelling (after the
+initial handshake, the SSH protocol is tunneled inside TLS, not inside
+WebSocket frames inside TLS), and they inherit all the security properties
+of the SSH protocol (barring potential memory corruption and resource
+exhaustion issues in the TLS and HTTP implementations, they should not
+increase the attack surface of the host at all).
+
+Configuring `ssh_tlsserver`
+---------------------------
+
+Run `make` to build all binaries. Allow `ssh_tlsserver` to bind to 443 without
+running as root:
 
 ```
-Host my-host.domain
-    ProxyCommand ~/bin/proxycommand_ssh_in_tls %h:443
+sudo setcap cap_net_bind_service=+ep ./bin/ssh_tlsserver
 ```
 
-If you don't have have a valid TLS certificate for the server, add `insecure`
-to the command (this is probably OK because you can rely on the known_hosts
-file to authenticate the actual sshd):
+The simplest configuration is to allow `ssh_tlsserver` to generate a
+self-signed certificate, in which case it can be invoked with no arguments.
+You can also use the `--cert` and `--key` flags to specify a TLS certificate to
+use, which will autoreload on change.
+
+Configure `~/.ssh/config` like this:
 
 ```
-Host my-host.domain
-    ProxyCommand ~/bin/proxycommand_ssh_in_tls %h:443 insecure
+Host myserverproxy
+    ProxyCommand openssl s_client -quiet -ign_eof -connect myserver.example.com:443
 ```
+
+or, to use this project's proxy binary:
+
+```
+Host myserverproxy
+    ProxyCommand ~/bin/ssh_proxycommand --insecure myserver.example.com:443
+```
+
+You can then connect via `ssh myserverproxy`.
+
+Both of these configurations disable verification of the TLS certificate,
+which should not reduce security given that one can rely instead on
+verification of the SSH host key.
+
+See `distrib/ssh_tlsserver.service` for an example systemd unit file.
+
+Configuring `ssh_httpserver`
+----------------------------
+
+Run `make` to build all binaries.
+
+The simplest and highest-performance configuration is to have `ssh_httpserver`
+listen on a Unix domain socket, e.g.
+
+```
+ssh_httpserver --listen /tmp/ssh_http_proxy_sock
+```
+
+nginx can then be configured to forward a designated path to the server.
+Although keeping the path secret is not necessary for security, it can
+help to avoid denial-of-service attacks:
+
+```
+	location /ssh_dGjlT09TOfkNXdYVtMQeOQ {
+		proxy_pass http://unix:/tmp/ssh_http_proxy_sock;
+		proxy_http_version 1.1;
+		proxy_read_timeout 600s;
+		proxy_set_header Upgrade $http_upgrade;
+		proxy_set_header Connection "Upgrade";
+		proxy_set_header X-Forwarded-For $remote_addr;
+		proxy_set_header X-Forwarded-Proto $scheme;
+	}
+```
+
+Configure `~/.ssh/config` like this:
+
+```
+Host myserverproxy
+    ProxyCommand ~/bin/ssh_proxycommand https://myserver.example.com/ssh_dGjlT09TOfkNXdYVtMQeOQ
+    # ensure that data is exchanged periodically, to stop nginx from closing the connection:
+    ServerAliveInterval 180
+```
+
+You can then connect via `ssh myserverproxy`.
+
+See `distrib/ssh_httpserver.service` for an example systemd unit file.
