@@ -91,6 +91,7 @@ func (h *WSToStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// (our custom ProxyCommand will omit the header)
 	if r.Header.Get("Origin") != "" {
 		h.errorResponse(w, r, http.StatusBadRequest, "websocket: must not send origin header")
+		return
 	}
 
 	success := false
