@@ -120,8 +120,11 @@ func (h *WSToStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// this should not be possible, since the client should wait for our HTTP
-	// response before sending
+	h.logPrintf("Accepted proxied connection from %s\n", r.RemoteAddr)
+
+	// accept already-buffered data (should not be possible, since compliant clients
+	// should wait for the 101 response before sending, but let's process it now
+	// without waiting)
 	if bufLen := brw.Reader.Buffered(); bufLen != 0 {
 		buf := make([]byte, bufLen)
 		// cannot error
@@ -143,8 +146,6 @@ func (h *WSToStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	netConn.SetWriteDeadline(time.Time{})
-
-	h.logPrintf("Accepted proxied connection from %s\n", r.RemoteAddr)
 
 	// this uses io.Copy which should specialize to sendfile(2) or splice(2),
 	// i.e. a pure kernelspace copy between the incoming and outgoing connections.
